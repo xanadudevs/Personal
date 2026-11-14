@@ -20,3 +20,6 @@ As alterações ficam em `MiudosDay` e sobrepõem o base; "Repor original" apaga
 alteração do dia. Notas novas ficam marcadas "(atualização manual)".
 
 API: `GET /api/miudos`, `PUT|DELETE /api/miudos/AAAA-MM-DD`, com o cabeçalho `x-miudos-token`.
+
+## Estado
+Primeiro deploy na Vercel.
