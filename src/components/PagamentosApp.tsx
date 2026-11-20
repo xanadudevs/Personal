@@ -23,7 +23,6 @@ interface Item {
   paidCents: number | null;
 }
 interface Data {
-  year: number;
   obligations: Obligation[];
   items: Item[];
 }
@@ -31,19 +30,42 @@ interface Data {
 const KEY_TOKEN = "miudos:token";
 const MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
 const CATEGORIES = ["Impostos", "Seguros", "Casa", "Carro", "Cartões", "Educação", "Outros"];
+const COLORS: Record<string, string> = {
+  Impostos: "#1f7a8c",
+  Seguros: "#c2571a",
+  Casa: "#5a7d2a",
+  Carro: "#a63d2f",
+  Cartões: "#6a4c9c",
+  Educação: "#b7791f",
+  Outros: "#6b7280",
+};
+const colorOf = (c: string) => COLORS[c] ?? COLORS.Outros;
 const FREQS = [
   ["ANUAL", "Anual"],
   ["SEMESTRAL", "Semestral"],
   ["TRIMESTRAL", "Trimestral"],
   ["MENSAL", "Mensal"],
 ];
+const RECUR: Record<string, string> = {
+  ANUAL: "todos os anos",
+  SEMESTRAL: "de 6 em 6 meses",
+  TRIMESTRAL: "de 3 em 3 meses",
+  MENSAL: "todos os meses",
+};
+const INK = "#1d2530";
+const MUTED = "#6b7280";
+const AMBER = "#c2571a";
+const LATE = "#c0392b";
+
 const eur = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" });
 const money = (cents: number) => eur.format(cents / 100);
 const localToday = () => {
   const n = new Date();
   return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
 };
-const dayMonth = (iso: string) => `${Number(iso.slice(8))} ${MONTHS[Number(iso.slice(5, 7)) - 1].slice(0, 3)}`;
+const dayDiff = (iso: string, today: string) => Math.round((Date.parse(`${iso}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000);
+const dateLabel = (iso: string) => `${Number(iso.slice(8))} ${MONTHS[Number(iso.slice(5, 7)) - 1].slice(0, 3)} ${iso.slice(0, 4)}`;
+const when = (d: number) => (d === 0 ? "hoje" : d === 1 ? "amanhã" : d > 1 ? `daqui a ${d} dias` : d === -1 ? "ontem" : `há ${-d} dias`);
 const parseEuros = (s: string) => {
   const t = s.trim().replace(/\s/g, "").replace(",", ".");
   if (!t) return null;
@@ -59,14 +81,15 @@ function readToken() {
   }
 }
 
+type Row = Item & { o: Obligation; diff: number };
+
 export default function PagamentosApp() {
-  const thisYear = new Date().getFullYear();
   const [token, setToken] = useState<string | null>(null);
   const [tokenInput, setTokenInput] = useState("");
-  const [year, setYear] = useState(thisYear);
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<"calendario" | "gerir">("calendario");
+  const [view, setView] = useState<"lista" | "gerir">("lista");
+  const [filter, setFilter] = useState("Todos");
   const [editing, setEditing] = useState<Obligation | "novo" | null>(null);
   const today = useMemo(localToday, []);
 
@@ -93,14 +116,17 @@ export default function PagamentosApp() {
     [token],
   );
 
+  // Este ano e o próximo: a lista é sempre "o que vem a seguir".
   const load = useCallback(async () => {
     try {
-      setData(await api("GET", `/api/pagamentos?year=${year}`));
+      const y = Number(today.slice(0, 4));
+      const [a, b] = await Promise.all([api("GET", `/api/pagamentos?year=${y}`), api("GET", `/api/pagamentos?year=${y + 1}`)]);
+      setData({ obligations: a.obligations, items: [...a.items, ...b.items] });
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro");
     }
-  }, [api, year]);
+  }, [api, today]);
 
   useEffect(() => {
     const fromUrl = new URLSearchParams(window.location.search).get("token");
@@ -126,34 +152,48 @@ export default function PagamentosApp() {
     }
   };
 
+  const toggle = (r: Row) => run(() => api("PUT", `/api/pagamentos/${r.obligationId}/pago`, { dueDate: r.dueDate, paid: !r.paid }));
+
   const byId = useMemo(() => new Map((data?.obligations ?? []).map((o) => [o.id, o])), [data]);
-  const rows = useMemo(
+  const all: Row[] = useMemo(
     () =>
       (data?.items ?? [])
-        .map((it) => ({ ...it, o: byId.get(it.obligationId)! }))
-        .filter((r) => r.o)
+        .flatMap((it) => {
+          const o = byId.get(it.obligationId);
+          return o ? [{ ...it, o, diff: dayDiff(it.dueDate, today) }] : [];
+        })
         .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.o.name.localeCompare(b.o.name)),
-    [data, byId],
+    [data, byId, today],
   );
-  const cents = (r: (typeof rows)[number]) => r.paidCents ?? r.o.amountCents ?? 0;
-  const total = rows.reduce((s, r) => s + cents(r), 0);
-  const paid = rows.filter((r) => r.paid).reduce((s, r) => s + cents(r), 0);
-  const next = rows.filter((r) => !r.paid).slice(0, 5);
-  const byMonth = MONTHS.map((_, m) => rows.filter((r) => Number(r.dueDate.slice(5, 7)) === m + 1));
+  const cents = (r: Row) => r.paidCents ?? r.o.amountCents ?? 0;
+
+  // Por pagar: de há 45 dias para a frente (o mais antigo fica de fora para não encher a lista).
+  const open = all.filter((r) => !r.paid && r.diff >= -45);
+  const done = all.filter((r) => r.paid && r.diff >= -180).reverse();
+  const cats = Array.from(new Set(open.map((r) => r.o.category)));
+  const f = cats.includes(filter) ? filter : "Todos";
+  const pick = (rows: Row[]) => (f === "Todos" ? rows : rows.filter((r) => r.o.category === f));
+  const groups: [string, string, Row[]][] = [
+    ["Em atraso", LATE, pick(open).filter((r) => r.diff < 0)],
+    ["Próximos 30 dias", "#9a6a12", pick(open).filter((r) => r.diff >= 0 && r.diff <= 30)],
+    ["Mais tarde", MUTED, pick(open).filter((r) => r.diff > 30)],
+  ];
+  const next12 = open.filter((r) => r.diff <= 365);
+  const total12 = next12.reduce((s, r) => s + cents(r), 0);
 
   if (token === null) return null;
 
   if (!token) {
     return (
       <main className="mx-auto max-w-md space-y-3 pt-10">
-        <h1 className="text-xl font-bold">Pagamentos</h1>
+        <h1 className="font-serif text-3xl">Pagamentos</h1>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <input
           value={tokenInput}
           onChange={(e) => setTokenInput(e.target.value)}
           placeholder="Chave de acesso"
           type="password"
-          className="w-full rounded-lg border border-[#d5dbe2] bg-white px-3 py-2"
+          className="w-full rounded-xl border border-[#ddd5c6] bg-white px-3 py-2"
         />
         <button
           onClick={() => {
@@ -163,7 +203,7 @@ export default function PagamentosApp() {
             setError("");
             setToken(tokenInput.trim());
           }}
-          className="w-full rounded-lg bg-[#2f86c4] py-2 font-semibold text-white"
+          className="w-full rounded-xl bg-[#1f7a8c] py-2 font-semibold text-white"
         >
           Entrar
         </button>
@@ -172,130 +212,113 @@ export default function PagamentosApp() {
   }
 
   return (
-    <main className="mx-auto max-w-2xl space-y-4">
-      <header className="flex items-center justify-between gap-2">
-        <h1 className="text-xl font-bold">Pagamentos</h1>
-        <div className="flex items-center gap-2">
-          <button onClick={() => setYear(year - 1)} className="rounded-lg bg-white px-3 py-1 shadow-sm" aria-label="Ano anterior">
-            ‹
-          </button>
-          <span className="w-12 text-center font-semibold">{year}</span>
-          <button onClick={() => setYear(year + 1)} className="rounded-lg bg-white px-3 py-1 shadow-sm" aria-label="Ano seguinte">
-            ›
-          </button>
-        </div>
-      </header>
-
-      {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-
-      <section className="grid grid-cols-3 gap-2 text-center">
-        {[
-          ["Total do ano", total, ""],
-          ["Pago", paid, "text-[#3f8a24]"],
-          ["Em falta", total - paid, "text-[#c0392b]"],
-        ].map(([label, v, cls]) => (
-          <div key={label as string} className="rounded-xl bg-white p-3 shadow-sm">
-            <div className="text-xs text-[#5b6675]">{label}</div>
-            <div className={`text-base font-bold ${cls}`}>{money(v as number)}</div>
-          </div>
-        ))}
-      </section>
-
-      {next.length > 0 && (
-        <section className="rounded-xl bg-white p-3 shadow-sm">
-          <h2 className="mb-2 text-sm font-semibold text-[#5b6675]">Próximos a pagar</h2>
-          <ul className="space-y-1">
-            {next.map((r) => (
-              <li key={r.obligationId + r.dueDate} className="flex justify-between text-sm">
-                <span className={r.dueDate < today ? "font-semibold text-red-600" : ""}>
-                  {dayMonth(r.dueDate)} · {r.o.name}
-                  {r.dueDate < today && " (em atraso)"}
-                </span>
-                <span>{r.o.amountCents != null ? money(r.o.amountCents) : "—"}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      <nav className="flex gap-2">
-        {(["calendario", "gerir"] as const).map((t) => (
+    <main className="mx-auto max-w-2xl">
+      <div className="overflow-hidden rounded-3xl border border-[#e8e1d3] bg-[#fffdf9] shadow-sm" style={{ color: INK }}>
+        <header className="flex items-center gap-3 px-5 pb-3 pt-5">
+          <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: INK }} />
+          <h1 className="font-serif text-[30px] leading-none">Pagamentos</h1>
           <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`rounded-lg px-4 py-1.5 text-sm font-semibold ${tab === t ? "bg-[#2f86c4] text-white" : "bg-white"}`}
+            onClick={() => setEditing("novo")}
+            className="rounded-full border-2 border-[#ddd5c6] bg-white px-4 py-1.5 text-[15px] font-semibold"
           >
-            {t === "calendario" ? "Calendário" : "Gerir"}
+            + Nova
           </button>
-        ))}
-      </nav>
+          <button
+            onClick={() => setView(view === "lista" ? "gerir" : "lista")}
+            className="ml-auto text-sm font-medium underline decoration-[#ddd5c6] underline-offset-4"
+            style={{ color: MUTED }}
+          >
+            {view === "lista" ? "Gerir" : "Voltar"}
+          </button>
+        </header>
 
-      {tab === "calendario" && (
-        <section className="space-y-3">
-          {data && data.obligations.length === 0 && (
-            <div className="space-y-2 rounded-xl bg-white p-3 text-sm shadow-sm">
-              <p className="text-[#5b6675]">Ainda não há pagamentos.</p>
-              <button
-                onClick={() => run(() => api("POST", "/api/pagamentos/seed"))}
-                className="w-full rounded-lg bg-[#2f86c4] py-2 font-semibold text-white"
-              >
-                Carregar pagamentos iniciais (IUC, IMI, condomínio, seguro)
-              </button>
-            </div>
-          )}
-          {byMonth.map((list, m) =>
-            list.length === 0 ? null : (
-              <div key={m} className="rounded-xl bg-white p-3 shadow-sm">
-                <h3 className="mb-1 text-sm font-semibold capitalize text-[#5b6675]">{MONTHS[m]}</h3>
-                <ul className="divide-y divide-[#eef1f4]">
-                  {list.map((r) => (
-                    <li key={r.obligationId + r.dueDate} className="flex items-center gap-3 py-2">
-                      <input
-                        type="checkbox"
-                        checked={r.paid}
-                        className="h-5 w-5"
-                        aria-label={`Pago: ${r.o.name}`}
-                        onChange={(e) =>
-                          run(() => api("PUT", `/api/pagamentos/${r.obligationId}/pago`, { dueDate: r.dueDate, paid: e.target.checked }))
-                        }
-                      />
-                      <div className={`flex-1 ${r.paid ? "text-[#8a94a1] line-through" : ""}`}>
-                        <div className="font-medium">{r.o.name}</div>
-                        <div className="text-xs text-[#5b6675]">
-                          {dayMonth(r.dueDate)} · {r.o.category}
-                        </div>
-                      </div>
-                      <div className="text-sm">{cents(r) || r.o.amountCents != null ? money(cents(r)) : "—"}</div>
-                    </li>
-                  ))}
-                </ul>
+        {error && <p className="mx-5 mb-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+
+        {view === "lista" && (
+          <>
+            {data && data.obligations.length === 0 && (
+              <div className="space-y-2 px-5 pb-5 text-sm">
+                <p style={{ color: MUTED }}>Ainda não há pagamentos.</p>
+                <button
+                  onClick={() => run(() => api("POST", "/api/pagamentos/seed"))}
+                  className="w-full rounded-xl bg-[#1f7a8c] py-2.5 font-semibold text-white"
+                >
+                  Carregar pagamentos iniciais (IUC, IMI, condomínio, seguro)
+                </button>
               </div>
-            ),
-          )}
-        </section>
-      )}
+            )}
 
-      {tab === "gerir" && (
-        <section className="space-y-2">
-          <button onClick={() => setEditing("novo")} className="w-full rounded-lg bg-[#2f86c4] py-2 font-semibold text-white">
-            + Novo pagamento
-          </button>
-          {data?.obligations.map((o) => (
-            <div key={o.id} className={`flex items-center justify-between rounded-xl bg-white p-3 shadow-sm ${o.active ? "" : "opacity-50"}`}>
-              <div>
-                <div className="font-medium">{o.name}</div>
-                <div className="text-xs text-[#5b6675]">
-                  {o.category} · {FREQS.find((f) => f[0] === o.frequency)?.[1]} · dia {o.dueDay} de {MONTHS[o.startMonth - 1]}
-                  {o.amountCents != null && ` · ${money(o.amountCents)}`}
+            {cats.length > 0 && (
+              <>
+                <div className="flex flex-wrap gap-2 px-5 pb-2">
+                  {["Todos", ...cats].map((c) => {
+                    const n = c === "Todos" ? open.length : open.filter((r) => r.o.category === c).length;
+                    const on = f === c;
+                    return (
+                      <button
+                        key={c}
+                        onClick={() => setFilter(c)}
+                        className={`rounded-full border-2 px-4 py-1.5 text-[15px] font-bold ${on ? "border-[#1f7a8c] bg-[#e3eff0]" : "border-[#ddd5c6] bg-white"}`}
+                      >
+                        {on && "✓ "}
+                        {c} · {n}
+                      </button>
+                    );
+                  })}
                 </div>
+                <p className="px-5 pb-2 text-sm" style={{ color: MUTED }}>
+                  Por pagar nos próximos 12 meses: <b style={{ color: INK }}>{money(total12)}</b>
+                </p>
+              </>
+            )}
+
+            {groups.map(([title, color, rows]) =>
+              rows.length === 0 ? null : (
+                <section key={title}>
+                  <h2 className="border-t border-[#ece6d8] px-5 pb-1 pt-3 text-sm font-medium" style={{ color }}>
+                    {title}
+                  </h2>
+                  {rows.map((r) => (
+                    <PayRow key={r.obligationId + r.dueDate} r={r} amount={cents(r)} onToggle={() => toggle(r)} onOpen={() => setEditing(r.o)} />
+                  ))}
+                </section>
+              ),
+            )}
+
+            {done.length > 0 && (
+              <details className="border-t border-[#ece6d8]">
+                <summary className="cursor-pointer px-5 py-3 text-sm font-medium" style={{ color: MUTED }}>
+                  Pagos · {done.length}
+                </summary>
+                {done.map((r) => (
+                  <PayRow key={r.obligationId + r.dueDate} r={r} amount={cents(r)} onToggle={() => toggle(r)} onOpen={() => setEditing(r.o)} />
+                ))}
+              </details>
+            )}
+          </>
+        )}
+
+        {view === "gerir" && (
+          <section className="border-t border-[#ece6d8]">
+            {data?.obligations.map((o) => (
+              <div key={o.id} className={`flex items-center gap-3 border-b border-[#ece6d8] px-4 py-3 ${o.active ? "" : "opacity-50"}`}>
+                <Badge category={o.category} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[17px] font-bold leading-tight">{o.name}</div>
+                  <div className="text-sm" style={{ color: MUTED }}>
+                    {FREQS.find((x) => x[0] === o.frequency)?.[1]} · dia {o.dueDay} de {MONTHS[o.startMonth - 1]}
+                    {o.amountCents != null && ` · ${money(o.amountCents)}`}
+                    {!o.active && " · inativo"}
+                  </div>
+                </div>
+                <button onClick={() => setEditing(o)} className="rounded-full border-2 border-[#ddd5c6] bg-white px-4 py-1 text-sm font-semibold">
+                  Editar
+                </button>
               </div>
-              <button onClick={() => setEditing(o)} className="rounded-lg bg-[#eef1f4] px-3 py-1 text-sm">
-                Editar
-              </button>
-            </div>
-          ))}
-        </section>
-      )}
+            ))}
+          </section>
+        )}
+      </div>
 
       {editing && (
         <ObligationForm
@@ -324,6 +347,55 @@ export default function PagamentosApp() {
   );
 }
 
+function Badge({ category }: { category: string }) {
+  return (
+    <span className="w-[82px] shrink-0 rounded-full py-1 text-center text-[12.5px] font-bold text-white" style={{ background: colorOf(category) }}>
+      {category}
+    </span>
+  );
+}
+
+function PayRow({ r, amount, onToggle, onOpen }: { r: Row; amount: number; onToggle: () => void; onOpen: () => void }) {
+  const color = colorOf(r.o.category);
+  const whenColor = r.diff < 0 ? LATE : r.diff <= 30 ? AMBER : MUTED;
+  return (
+    <div onClick={onOpen} className="flex cursor-pointer items-center gap-3 border-b border-[#ece6d8] px-4 py-3 last:border-b-0">
+      <Badge category={r.o.category} />
+      <div className="min-w-0 flex-1">
+        <div className={`text-[17px] font-bold leading-tight ${r.paid ? "line-through opacity-50" : ""}`}>{r.o.name}</div>
+        <div className="text-[13px] leading-snug" style={{ color: MUTED }}>
+          {r.paid ? (
+            <span style={{ color: "#3f7d20" }} className="font-semibold">
+              pago
+            </span>
+          ) : (
+            <span style={{ color: whenColor }} className="font-bold">
+              {when(r.diff)}
+            </span>
+          )}
+          {" · "}até {dateLabel(r.dueDate)}
+          {amount > 0 && ` · ${money(amount)}`}
+          {" · "}
+          {RECUR[r.o.frequency]}
+        </div>
+      </div>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle();
+        }}
+        aria-label={`${r.paid ? "Desmarcar" : "Marcar como pago"}: ${r.o.name}`}
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2"
+        style={{ borderColor: color, background: r.paid ? color : "transparent", color: r.paid ? "#fff" : color }}
+      >
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" opacity={r.paid ? 1 : 0.4}>
+          <path d="M5 12.5l4.5 4.5L19 7.5" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 function ObligationForm({
   initial,
   onClose,
@@ -345,7 +417,7 @@ function ObligationForm({
   const [active, setActive] = useState(initial?.active ?? true);
   const [err, setErr] = useState("");
 
-  const field = "w-full rounded-lg border border-[#d5dbe2] bg-white px-3 py-2";
+  const field = "w-full rounded-xl border border-[#ddd5c6] bg-white px-3 py-2";
   const label = "block space-y-1 text-sm font-medium";
 
   const submit = () => {
@@ -357,8 +429,8 @@ function ObligationForm({
 
   return (
     <div className="fixed inset-0 z-10 flex items-end justify-center bg-black/40 sm:items-center" onClick={onClose}>
-      <div className="max-h-[90vh] w-full max-w-md space-y-3 overflow-y-auto rounded-t-2xl bg-[#f3f5f7] p-4 sm:rounded-2xl" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-lg font-bold">{initial ? "Editar pagamento" : "Novo pagamento"}</h2>
+      <div className="max-h-[90vh] w-full max-w-md space-y-3 overflow-y-auto rounded-t-3xl bg-[#fbf8f1] p-5 sm:rounded-3xl" onClick={(e) => e.stopPropagation()}>
+        <h2 className="font-serif text-2xl">{initial ? "Editar pagamento" : "Novo pagamento"}</h2>
         {err && <p className="text-sm text-red-600">{err}</p>}
         <label className={label}>
           Nome
@@ -407,18 +479,18 @@ function ObligationForm({
           <textarea className={field} rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Nº de apólice, referência multibanco..." />
         </label>
         <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> Ativo (aparece no calendário)
+          <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> Ativo (aparece na lista)
         </label>
         <div className="flex gap-2 pt-1">
-          <button onClick={submit} className="flex-1 rounded-lg bg-[#2f86c4] py-2 font-semibold text-white">
+          <button onClick={submit} className="flex-1 rounded-xl bg-[#1f7a8c] py-2.5 font-semibold text-white">
             Guardar
           </button>
-          <button onClick={onClose} className="rounded-lg bg-white px-4 py-2">
+          <button onClick={onClose} className="rounded-xl border border-[#ddd5c6] bg-white px-4 py-2.5">
             Cancelar
           </button>
         </div>
         {onDelete && (
-          <button onClick={onDelete} className="w-full rounded-lg py-2 text-sm text-red-600">
+          <button onClick={onDelete} className="w-full rounded-xl py-2 text-sm text-red-600">
             Apagar pagamento
           </button>
         )}
