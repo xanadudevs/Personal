@@ -232,7 +232,17 @@ export default function PagamentosApp() {
 
       {tab === "calendario" && (
         <section className="space-y-3">
-          {data && rows.length === 0 && <p className="text-sm text-[#5b6675]">Ainda não há pagamentos. Adiciona-os em “Gerir”.</p>}
+          {data && data.obligations.length === 0 && (
+            <div className="space-y-2 rounded-xl bg-white p-3 text-sm shadow-sm">
+              <p className="text-[#5b6675]">Ainda não há pagamentos.</p>
+              <button
+                onClick={() => run(() => api("POST", "/api/pagamentos/seed"))}
+                className="w-full rounded-lg bg-[#2f86c4] py-2 font-semibold text-white"
+              >
+                Carregar pagamentos iniciais (IUC, IMI, condomínio, seguro)
+              </button>
+            </div>
+          )}
           {byMonth.map((list, m) =>
             list.length === 0 ? null : (
               <div key={m} className="rounded-xl bg-white p-3 shadow-sm">
