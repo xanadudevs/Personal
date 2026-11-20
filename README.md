@@ -21,5 +21,18 @@ alteração do dia. Notas novas ficam marcadas "(atualização manual)".
 
 API: `GET /api/miudos`, `PUT|DELETE /api/miudos/AAAA-MM-DD`, com o cabeçalho `x-miudos-token`.
 
+## Pagamentos (`/pagamentos`)
+Gestão dos pagamentos que se repetem todos os anos (UIC, IMI, seguro do carro,
+condomínio, cartões de crédito...). Usa a mesma chave `MIUDOS_TOKEN` e a mesma
+base de dados; o build cria as tabelas `Obligation` e `ObligationPayment`.
+
+- Cada pagamento tem categoria, valor habitual (opcional), frequência
+  (anual, semestral, trimestral, mensal), mês/dia de vencimento e notas.
+- O calendário mostra os vencimentos do ano por mês, com totais (do ano, pago,
+  em falta), os próximos a pagar e os em atraso. Marcar o visto regista o pagamento.
+- API: `GET|POST /api/pagamentos`, `PUT|DELETE /api/pagamentos/ID`,
+  `PUT /api/pagamentos/ID/pago`, `POST /api/pagamentos/seed` (carrega IUC, IMI,
+  condomínio e seguro, sem duplicar), com o cabeçalho `x-miudos-token`.
+
 ## Estado
 Primeiro deploy na Vercel.

@@ -1,0 +1,40 @@
+// Pagamentos iniciais (botão "Carregar pagamentos iniciais"). Sem IBAN, NIF,
+// morada, matrícula ou nº de apólice: o repositório é público.
+export const SEED_OBLIGATIONS = [
+  {
+    name: "IUC",
+    category: "Impostos",
+    amountCents: 18558,
+    frequency: "ANUAL",
+    startMonth: 11,
+    dueDay: 30,
+    notes: "Guia da AT; a referência de pagamento muda todos os anos.",
+  },
+  {
+    name: "IMI",
+    category: "Impostos",
+    amountCents: null,
+    frequency: "SEMESTRAL",
+    startMonth: 5,
+    dueDay: 31,
+    notes: "Duas prestações (maio e novembro). Falta indicar o valor.",
+  },
+  {
+    name: "Condomínio",
+    category: "Casa",
+    amountCents: 27000,
+    frequency: "SEMESTRAL",
+    startMonth: 6,
+    dueDay: 1,
+    notes: "Transferência para o condomínio. Meses a confirmar.",
+  },
+  {
+    name: "Seguro automóvel",
+    category: "Seguros",
+    amountCents: 64416,
+    frequency: "ANUAL",
+    startMonth: 12,
+    dueDay: 11,
+    notes: "Débito direto a 11/12. Prémio atualizado em 2026.",
+  },
+];
