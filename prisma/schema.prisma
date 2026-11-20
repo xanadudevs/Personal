@@ -18,3 +18,30 @@ model MiudosDay {
   notes     String? // notas separadas por " | "; null = mantém as base, "" = sem notas
   updatedAt DateTime @updatedAt
 }
+
+// Pagamentos recorrentes (UIC, IMI, seguro, condomínio, cartões...).
+model Obligation {
+  id          String   @id @default(cuid())
+  name        String
+  category    String   @default("Outros")
+  amountCents Int? // valor habitual em cêntimos; null = variável
+  frequency   String   @default("ANUAL") // ANUAL | SEMESTRAL | TRIMESTRAL | MENSAL
+  startMonth  Int // mês (1-12) do primeiro vencimento do ano
+  dueDay      Int      @default(1) // dia do mês (ajustado ao último dia se não existir)
+  notes       String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  payments    ObligationPayment[]
+}
+
+// Existir uma linha = esse vencimento está pago.
+model ObligationPayment {
+  id           String     @id @default(cuid())
+  obligationId String
+  obligation   Obligation @relation(fields: [obligationId], references: [id], onDelete: Cascade)
+  dueDate      String // AAAA-MM-DD
+  paidAt       DateTime   @default(now())
+  amountCents  Int? // valor realmente pago
+
+  @@unique([obligationId, dueDate])
+}
