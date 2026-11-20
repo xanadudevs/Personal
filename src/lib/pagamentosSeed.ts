@@ -13,11 +13,11 @@ export const SEED_OBLIGATIONS = [
   {
     name: "IMI",
     category: "Impostos",
-    amountCents: null,
+    amountCents: 12600,
     frequency: "SEMESTRAL",
     startMonth: 5,
     dueDay: 31,
-    notes: "Duas prestações (maio e novembro). Falta indicar o valor.",
+    notes: "Duas prestações (maio e novembro).",
   },
   {
     name: "Condomínio",
@@ -26,7 +26,7 @@ export const SEED_OBLIGATIONS = [
     frequency: "SEMESTRAL",
     startMonth: 6,
     dueDay: 1,
-    notes: "Transferência para o condomínio. Meses a confirmar.",
+    notes: "Quota de 45 €/mês, paga por semestre (6 × 45 €). Meses a confirmar.",
   },
   {
     name: "Seguro automóvel",
